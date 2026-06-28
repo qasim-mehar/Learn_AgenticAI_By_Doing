@@ -1,0 +1,263 @@
+cp ~/.gitignore ~/Learn_AgenticAi_By_Doing/.gitignore
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+venv.bak/
+env.bak/
+.uv/
+uv.lock
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+.project
+.pydevproject
+.settings/
+*.iml
+
+# LLM & API Keys (CRITICAL - never commit these)
+*.key
+*.pem
+secret_key.txt
+api_keys.txt
+credentials.json
+.aws/
+.credentials/
+
+# LangChain & LangGraph cache
+.langchain/
+.langgraph_state/
+.chroma_db/
+.weaviate/
+checkpoints/
+*.db
+*.sqlite
+*.sqlite3
+
+# Vector databases & embeddings
+faiss_index/
+milvus_db/
+qdrant_data/
+chroma_db/
+vectorstore/
+embeddings_cache/
+
+# LangSmith traces & monitoring
+.langsmith/
+lansmith_runs/
+traces/
+*.trace.json
+
+# Node & React
+node_modules/
+npm-debug.log
+yarn-error.log
+.pnpm-debug.log
+dist/
+build/
+.next/
+out/
+.nuxt/
+.cache/
+.vuepress/dist/
+.serverless/
+.fusebox/
+.dynamodb/
+.tern-port
+
+# React specific
+*.jsx.map
+*.tsx.map
+.eslintcache
+
+# Package managers
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+composer.lock
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+.swp
+.swo
+*~
+.~*
+
+# Data files (keep only committed samples)
+data/
+datasets/
+*.csv
+*.xlsx
+*.xls
+!data/sample/
+!data/example/
+
+# Model weights (too large)
+models/
+weights/
+*.bin
+*.safetensors
+*.onnx
+checkpoints/
+
+# LLM outputs
+outputs/
+results/
+generated/
+*.txt
+!README.txt
+!requirements.txt
+
+# FastAPI
+.asgi_app_cache/
+app_cache/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+db/
+database/
+!migrations/
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Git
+.git/
+.gitattributes
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+.testmonitor/
+
+# Jupyter
+.ipynb_checkpoints
+*.ipynb_checkpoints
+.jupyter/
+
+# Research notebooks
+notebooks/experiments/
+notebooks/**/outputs/
+notebooks/.ipynb_checkpoints/
+
+# MacOS
+.AppleDouble
+.LSOverride
+.TemporaryItems
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Project specific
+.vscode/settings.json
+.vscode/launch.json
+
+# Secrets (be explicit)
+secrets/
+private/
+.private/
+/config/secrets.yaml
+
+# LangGraph specific
+graph_state/
+agent_memory/
+persistent_state/
+snapshots/
+
+# Observability/Monitoring
+metrics/
+profiling/
+benchmarks/results/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# IDE generated
+.idea/
+.vscode/
+*.sublime-workspace
+*.sublime-project
+
+# Misc
+.envrc
+.direnv
+thumbs.db
