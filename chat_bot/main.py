@@ -118,18 +118,36 @@ graph_with_tools = graph_builder_with_tools.compile(checkpointer=memory)
 config = {"configurable": {"thread_id": "1"}}
 
 
+# result = graph_with_tools.invoke(
+#     {"messages": [{"role": "user", "content": "my name is qasim"}]},
+#     config=config,
+# )
+# print(result["messages"])
+
+# result = graph_with_tools.invoke(
+#     {"messages": [{"role": "user", "content": "do you remember my name?"}]},
+#     config=config,
+# )
+# print(result["messages"])
+
 # png_bytes = graph_with_tools.get_graph().draw_mermaid_png()
 # with open("graph.png", "wb") as f:
 #     f.write(png_bytes)
-# print("Saved graph.png")
-result = graph_with_tools.invoke(
+
+
+for chunk in graph_with_tools.stream(
     {"messages": [{"role": "user", "content": "my name is qasim"}]},
     config=config,
-)
-print(result["messages"])
+    stream_mode="values",
+):
+    print(chunk)
 
-result = graph_with_tools.invoke(
-    {"messages": [{"role": "user", "content": "do you remember my name?"}]},
+
+print("=*50")
+
+for chunk in graph_with_tools.stream(
+    {"messages": [{"role": "user", "content": "my name is ?"}]},
     config=config,
-)
-print(result["messages"])
+    stream_mode="values",
+):
+    print(chunk)
