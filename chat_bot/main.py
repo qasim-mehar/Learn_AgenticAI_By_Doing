@@ -96,3 +96,7 @@ def web_search(topic: str) -> str:
 
 tools = [web_search]
 llm_with_tools = llm.bind_tools(tools)
+
+
+def chatbot_with_tools(state: State):
+    return {"messages": [llm_with_tools.invoke(state["messages"])]}
