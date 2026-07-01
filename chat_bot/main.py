@@ -63,3 +63,20 @@ class State(TypedDict):
 
 
 llm = ChatMistralAI(model="mistral-medium-3-5")
+
+
+# NODE FUNCTIONALITY
+def chatbot(state: State):
+    return {"messages": [llm.invoke(state["messages"])]}
+
+
+# PASS STATE IN STATEGRAPH SO WE CAN ACCESS THIS STATE ANYWHERE IN THE GRAPH
+graph_builder = StateGraph(State)
+
+graph_builder.add_node("chatbotNode", chatbot)
+graph_builder.add_edge(START, "chatbotNode")
+graph_builder.add_edge("chatbotNode", END)
+
+graph = graph_builder.compile()
+
+# graph.invoke({"messages": "hi"})
