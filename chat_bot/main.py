@@ -2,14 +2,15 @@ from rich import print
 from typing import Annotated, TypedDict
 from typing import Annotated
 from typing_extensions import TypedDict
-from langchain.chat_models import init_chat_model
+
+from langchain_mistralai import ChatMistralAI
+from langchain_tavily.tavily_search import TavilySearch
 from langchain.tools import tool
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.graph.message import add_messages
 from langgraph.graph import add_messages
-from langchain_mistralai import ChatMistralAI
-from langchain_tavily.tavily_search import TavilySearch
+from langgraph.checkpoint.memory import MemorySaver
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -83,6 +84,8 @@ graph = graph_builder.compile()
 
 # Chatbot with tools
 
+memory = MemorySaver()
+
 tavily_search = TavilySearch(
     max_results=1,
 )
@@ -110,14 +113,23 @@ graph_builder_with_tools.add_edge(START, "chatbotWithTools")
 graph_builder_with_tools.add_conditional_edges("chatbotWithTools", tools_condition)
 graph_builder_with_tools.add_edge("tools", "chatbotWithTools")
 
-graph_with_tools = graph_builder_with_tools.compile()
+graph_with_tools = graph_builder_with_tools.compile(checkpointer=memory)
 
-png_bytes = graph_with_tools.get_graph().draw_mermaid_png()
-with open("graph.png", "wb") as f:
-    f.write(png_bytes)
-print("Saved graph.png")
+config = {"configurable": {"thread_id": "1"}}
 
-# result = graph_with_tools.invoke(
-#     {"messages": [{"role": "user", "content": "What's the latest news on Mistral AI?"}]}
-# )
-# print(result["messages"])
+
+# png_bytes = graph_with_tools.get_graph().draw_mermaid_png()
+# with open("graph.png", "wb") as f:
+#     f.write(png_bytes)
+# print("Saved graph.png")
+result = graph_with_tools.invoke(
+    {"messages": [{"role": "user", "content": "my name is qasim"}]},
+    config=config,
+)
+print(result["messages"])
+
+result = graph_with_tools.invoke(
+    {"messages": [{"role": "user", "content": "do you remember my name?"}]},
+    config=config,
+)
+print(result["messages"])
