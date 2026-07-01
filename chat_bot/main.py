@@ -100,3 +100,24 @@ llm_with_tools = llm.bind_tools(tools)
 
 def chatbot_with_tools(state: State):
     return {"messages": [llm_with_tools.invoke(state["messages"])]}
+
+
+graph_builder_with_tools = StateGraph(State)
+graph_builder_with_tools.add_node("chatbotWithTools", chatbot_with_tools)
+graph_builder_with_tools.add_node("tools", ToolNode(tools))
+
+graph_builder_with_tools.add_edge(START, "chatbotWithTools")
+graph_builder_with_tools.add_conditional_edges("chatbotWithTools", tools_condition)
+graph_builder_with_tools.add_edge("tools", "chatbotWithTools")
+
+graph_with_tools = graph_builder_with_tools.compile()
+
+png_bytes = graph_with_tools.get_graph().draw_mermaid_png()
+with open("graph.png", "wb") as f:
+    f.write(png_bytes)
+print("Saved graph.png")
+
+# result = graph_with_tools.invoke(
+#     {"messages": [{"role": "user", "content": "What's the latest news on Mistral AI?"}]}
+# )
+# print(result["messages"])
