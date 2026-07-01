@@ -80,3 +80,19 @@ graph_builder.add_edge("chatbotNode", END)
 graph = graph_builder.compile()
 
 # graph.invoke({"messages": "hi"})
+
+# Chatbot with tools
+
+tavily_search = TavilySearch(
+    max_results=1,
+)
+
+
+@tool
+def web_search(topic: str) -> str:
+    """Search on web for latest information"""
+    return tavily_search.invoke(topic)
+
+
+tools = [web_search]
+llm_with_tools = llm.bind_tools(tools)
