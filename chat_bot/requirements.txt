@@ -3,3 +3,7 @@ langchain_core
 langchain_community
 langsmith
 langgraph
+ipykernel
+python-dotenv
+langchain_mistralai
+langchain_tavily

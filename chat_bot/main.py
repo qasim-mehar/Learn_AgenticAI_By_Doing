@@ -1,12 +1,18 @@
+from rich import print
+from typing import Annotated, TypedDict
 from typing import Annotated
 from typing_extensions import TypedDict
 from langchain.chat_models import init_chat_model
+from langchain.tools import tool
 from langgraph.graph import StateGraph, START, END
+from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.graph.message import add_messages
-
-
-from typing import Annotated, TypedDict
 from langgraph.graph import add_messages
+from langchain_mistralai import ChatMistralAI
+from langchain_tavily.tavily_search import TavilySearch
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 class State(TypedDict):
@@ -54,3 +60,6 @@ class State(TypedDict):
     """
 
     messages: Annotated[list, add_messages]
+
+
+llm = ChatMistralAI(model="mistral-medium-3-5")
