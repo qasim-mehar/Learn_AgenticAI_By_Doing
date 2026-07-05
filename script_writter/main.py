@@ -128,3 +128,8 @@ graph.add_edge("TextEditor", "ScriptWritter")
 graph.add_edge("ScriptWritter","Translator")
 graph.add_edge("Translator", END)
 
+app=graph.compile()
+final_script=app.invoke({
+    "raw_input": "how to focus in world of distraction... smartphone are ruining focus. we scroll instagram, tiktok all day. dopamine detox is needed. 1st step: turn off notifications. 2nd step: keep phone in other room while working. 3rd step: replace scrolling with reading or walking. it helps reclaim brain power. lets do a 24 hour challenge."
+})
+print(final_script["roman_urdu"])
