@@ -5,3 +5,4 @@ langgraph
 langchain-mistralai
 python-dotenv
 pydantic
+rich

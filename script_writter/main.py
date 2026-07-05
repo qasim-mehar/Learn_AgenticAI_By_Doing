@@ -1,9 +1,10 @@
+from rich import print
 import os
 import sys
 from dotenv import load_dotenv
 from typing import TypedDict
 from langchain_mistralai import ChatMistralAI 
-from rich import print
+from langgraph.graph import StateGraph, START, END
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -111,3 +112,19 @@ def roman_urdu_node(state: pipleineState) -> dict:
     ]
     res = llm.invoke(messages)
     return {"roman_urdu": res.content.strip()}
+
+
+#adding nodes in graph
+graph=StateGraph(pipleineState)
+
+graph.add_node("TextEditor",text_editor_node)
+graph.add_node("ScriptWritter",script_writter_node)
+graph.add_node("Translator",roman_urdu_node)
+
+#connecting nodes using edges
+
+graph.add_edge(START, "TextEditor")
+graph.add_edge("TextEditor", "ScriptWritter")
+graph.add_edge("ScriptWritter","Translator")
+graph.add_edge("Translator", END)
+
