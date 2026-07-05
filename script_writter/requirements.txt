@@ -1,0 +1,7 @@
+langchain
+langchain-core
+langchain-community
+langgraph
+langchain-mistralai
+python-dotenv
+pydantic
