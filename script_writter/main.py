@@ -77,3 +77,37 @@ def script_writter_node(state: pipleineState) -> dict:
     ]
     res = llm.invoke(messages)
     return {"script_text": res.content.strip()}
+
+def roman_urdu_node(state: pipleineState) -> dict:
+    """
+    LangGraph node to translate the English script into conversational Roman Urdu.
+    
+    This node translates the spoken narration of the English script into natural,
+    conversational Roman Urdu (Urdu written in the Latin alphabet) while keeping
+    visual directions in English and maintaining the original structure.
+    
+    Args:
+        state (pipleineState): The current state of the pipeline containing `script_text`.
+        
+    Returns:
+        dict: The updated state dictionary containing `roman_urdu`.
+    """
+    messages = [
+        (
+            "system",
+            "You are an expert translator specializing in translating English video scripts into conversational Roman Urdu "
+            "(Urdu written in the Latin/English alphabet).\n"
+            "Your task is to translate the provided English script. Follow these rules:\n\n"
+            "- TRANSLATION: Translate all spoken NARRATION into natural, fluid Roman Urdu. Use words and phrasing that sound "
+            "natural when spoken aloud (everyday spoken Urdu, not overly formal or literal translations).\n"
+            "- ENGLISH LOAN WORDS: Keep common modern English words and technical terms in English (e.g., 'AI', 'computer', "
+            "'subscribe', 'algorithm', 'link', 'video') written in standard English.\n"
+            "- VISUAL DIRECTIONS: Keep all [VISUAL DIRECTIONS] inside the brackets in English as they are for visual reference. "
+            "Do not translate text inside brackets.\n"
+            "- STRUCTURE: Maintain the exact structure, formatting, and line breaks of the original script. Return only the "
+            "translated script."
+        ),
+        ("human", state["script_text"]),
+    ]
+    res = llm.invoke(messages)
+    return {"roman_urdu": res.content.strip()}
