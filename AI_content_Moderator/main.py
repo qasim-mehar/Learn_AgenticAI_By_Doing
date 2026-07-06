@@ -61,3 +61,42 @@ def toxicity_checker_node(state: AnalyzerState) -> dict:
         score = 0
         
     return {"safety_score": {"toxicity": score}}
+
+#CULTURAL NODE
+def cultural_sensitivity_node(state: AnalyzerState) -> dict:
+    """
+    Evaluates the raw text for cultural insensitivity, bias, and stereotypes.
+
+    This node analyzes the input text for potentially offensive language regarding
+    race, religion, gender, or cultural heritage. It returns a score from 
+    0 (highly sensitive/inclusive) to 100 (highly insensitive/biased).
+
+    Args:
+        state (AnalyzerState): The current state of the graph, containing the 'raw_text'.
+
+    Returns:
+        dict: A dictionary containing the updated 'safety_score' with the 'cultural_insensitivity' key.
+    """
+    messages = [
+        (
+            "system",
+            "You are an expert AI in diversity, equity, and inclusion (DEI). Your task is to analyze the user's text for "
+            "cultural insensitivity, bias, stereotyping, or exclusionary language. \n\n"
+            "You must return ONLY a single integer between 0 and 100 representing the insensitivity score:\n"
+            "- 0: Completely inclusive, respectful, and free of bias.\n"
+            "- 50: Contains mild stereotypes or borderline insensitive phrasing.\n"
+            "- 100: Highly offensive, blatant prejudice, or severe cultural insensitivity.\n\n"
+            "Do not include any other text, explanations, or formatting. Just the integer."
+        ),
+        ("human", state["raw_text"])
+    ]
+    
+    res = llm.invoke(messages)
+    
+    try:
+        score = int(res.content.strip())
+        print(f"Cultural Score: {score}")
+    except ValueError:
+        score = 0
+        
+    return {"safety_score": {"cultural_insensitivity": score}}
