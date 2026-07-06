@@ -100,3 +100,42 @@ def cultural_sensitivity_node(state: AnalyzerState) -> dict:
         score = 0
         
     return {"safety_score": {"cultural_insensitivity": score}}
+
+#COPYRIGHT NODE
+def copyright_checker_node(state: AnalyzerState) -> dict:
+    """
+    Evaluates the raw text for potential copyright infringement or IP violations.
+
+    This node checks if the text heavily borrows from protected works, quotes 
+    excessive amounts of lyrics/scripts without attribution, or attempts to 
+    plagiarize known content. It returns a risk score from 0 to 100.
+
+    Args:
+        state (AnalyzerState): The current state of the graph, containing the 'raw_text'.
+
+    Returns:
+        dict: A dictionary containing the updated 'safety_score' with the 'copyright_risk' key.
+    """
+    messages = [
+        (
+            "system",
+            "You are an expert intellectual property (IP) and copyright analyst AI. Your task is to analyze the user's text "
+            "for potential copyright infringement, plagiarism, or unauthorized distribution of protected works. \n\n"
+            "You must return ONLY a single integer between 0 and 100 representing the copyright risk score:\n"
+            "- 0: Completely original text or clearly fair use.\n"
+            "- 50: Contains significant recognizable quotes or borderline derivative work.\n"
+            "- 100: Blatant plagiarism, sharing full protected lyrics/scripts, or severe IP violation.\n\n"
+            "Do not include any other text, explanations, or formatting. Just the integer."
+        ),
+        ("human", state["raw_text"])
+    ]
+    
+    res = llm.invoke(messages)
+    
+    try:
+        score = int(res.content.strip())
+        print(f"Copyright Score: {score}")
+    except ValueError:
+        score = 0
+        
+    return {"safety_score": {"copyright_risk": score}}
