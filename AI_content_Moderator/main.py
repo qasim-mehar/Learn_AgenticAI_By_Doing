@@ -139,3 +139,21 @@ def copyright_checker_node(state: AnalyzerState) -> dict:
         score = 0
         
     return {"safety_score": {"copyright_risk": score}}
+
+#Building graph
+graph_builder=StateGraph(AnalyzerState)
+
+#CRAETING NODES IN GRAPH
+graph_builder.add_node("toxicity_node", toxicity_checker_node)
+graph_builder.add_node("cultural_node", cultural_sensitivity_node)
+graph_builder.add_node("copyright_node", copyright_checker_node)
+
+#CONNECTING NODES USING EDGES
+
+graph_builder.add_edge(START, "toxicity_node")
+graph_builder.add_edge(START, "cultural_node")
+graph_builder.add_edge(START, "copyright_node")
+
+graph_builder.add_edge("toxicity_node", END)
+graph_builder.add_edge("cultural_node", END)
+graph_builder.add_edge("copyright_node" ,END)
