@@ -2,6 +2,7 @@ from typing import TypedDict, Annotated
 from langchain_mistralai import ChatMistralAI
 from langgraph.graph import StateGraph , START , END
 from dotenv import load_dotenv
+from rich import print
 load_dotenv()
 
 llm = ChatMistralAI(
@@ -95,7 +96,7 @@ def cultural_sensitivity_node(state: AnalyzerState) -> dict:
     
     try:
         score = int(res.content.strip())
-        print(f"Cultural Score: {score}")
+        
     except ValueError:
         score = 0
         
@@ -157,3 +158,27 @@ graph_builder.add_edge(START, "copyright_node")
 graph_builder.add_edge("toxicity_node", END)
 graph_builder.add_edge("cultural_node", END)
 graph_builder.add_edge("copyright_node" ,END)
+
+graph=graph_builder.compile()
+
+if __name__ == "__main__":
+  
+    test_text = (
+        "You are absolutely pathetic and I hate your guts. "
+        "Also, as Mickey Mouse always says in Disney's famous movie: 'I am going to sue you!' "
+        "And another thing, all people from Mars are lazy and smell bad."
+    )
+    
+    print("--- Starting Content Analysis ---")
+    print(f"Text: {test_text}\n")
+    
+    # Run the LangGraph
+    # We only need to provide the raw_text. 
+    # The safety_score dictionary will be built dynamically by our merge_score_dicts function.
+    result = graph.invoke({"raw_text": test_text})
+    
+    print("\n--- Final Analysis Results ---")
+    
+    # We use json.dumps just to print the dictionary beautifully
+    import json
+    print(json.dumps(result.get("safety_score", {}), indent=4))
