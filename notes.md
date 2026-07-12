@@ -610,3 +610,11 @@ Every project you built is a variation of this exact pattern. The more complex y
 ---
 
 > 💪 **You have covered an impressive range for a beginner. The foundation is solid. Keep building!**
+
+
+stream , astream, value, update, HITL, interupt, command,
+MCP:
+ mcp adapters
+ transport:
+            HTTP
+            STDIO
