@@ -618,3 +618,4 @@ MCP:
  transport:
             HTTP
             STDIO
+            SSE
