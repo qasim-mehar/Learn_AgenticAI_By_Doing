@@ -1,3 +1,6 @@
 langchain-mistralai
 langchain-mcp-adapters
 mcp
+langchain
+langgraph
+python-dotenv

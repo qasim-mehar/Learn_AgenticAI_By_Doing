@@ -3,7 +3,8 @@ from mcp.server.fastmcp import FastMCP
 mcp=FastMCP("weather")
 
 @mcp.tool()
-def checkWeather():
+def checkWeather(location:str)->str:
+    """for now just return a hard coded value"""
     return "Weather here in islamabad is pretty cold"
 
 if __name__=="__main__":
