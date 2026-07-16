@@ -577,45 +577,470 @@ Every project you built is a variation of this exact pattern. The more complex y
 
 ---
 
+# 🧠 My Agentic AI Learning Notes — Extended Chapters
+
+> Continuation of your original notes. Same teaching style, filling the gaps you flagged: streaming modes, HITL/interrupt/Command, MCP (adapters, transports, and what changed in 2026), and the complete RAG pipeline.
+
+---
+
+## 🔄 Chapter 16: Streaming — `stream`, `astream`, and `stream_mode`
+
+You already used `graph.stream(..., stream_mode="values")` in your chatbot. Let's actually understand the full picture, because this is one of those things where "it works" and "I understand why it works" are very different levels.
+
+### `stream` vs `astream` — sync vs async
+
+- `graph.stream(...)` — synchronous. Blocks your program while running. Fine for scripts, notebooks, simple CLIs.
+- `graph.astream(...)` — asynchronous. You `await` it inside an `async def`. This is what you need for **FastAPI backends** (like your OrchestraAI backend) because you don't want one user's long agent run to block every other request.
+
+```python
+# Sync — blocks the whole process
+for chunk in graph.stream({"messages": [...]}, config=config):
+    print(chunk)
+
+# Async — used inside FastAPI endpoints
+async def run_agent(user_input: str, config: dict):
+    async for chunk in graph.astream({"messages": [{"role": "user", "content": user_input}]}, config=config):
+        yield chunk  # can be sent to client as it arrives
+```
+
+Rule of thumb: **notebook/script → `stream`. Real backend serving multiple users → `astream`.**
+
+### `stream_mode` — what gets sent to you after each step
+
+This is the part most people gloss over. `stream_mode` controls the *shape* of what you receive per chunk, not just whether it streams.
+
+| Mode | What you get | When to use |
+|---|---|---|
+| `"values"` | The **full current state** after each node | Simple chatbots — you always want the whole picture |
+| `"updates"` | Only the **dict returned by the node that just ran** (`{node_name: {...changes...}}`) | Debugging, or when state is large and you only care about deltas |
+| `"messages"` | **Token-by-token** LLM output as it's generated, plus metadata about which node/model produced it | ChatGPT-style live typing effect in a UI |
+| `"debug"` | Verbose internal events (task start, task end, checkpoints) | Deep debugging of graph execution |
+| `"custom"` | Whatever you explicitly push using `get_stream_writer()` inside a node | Progress updates from inside long-running tool calls |
+
+```python
+# "values" — full state snapshot every time
+for chunk in graph.stream(inputs, config, stream_mode="values"):
+    print(chunk["messages"][-1])  # last message in the whole convo so far
+
+# "updates" — only what changed
+for chunk in graph.stream(inputs, config, stream_mode="updates"):
+    print(chunk)  # e.g. {"chatbotWithTools": {"messages": [...]}}
+
+# "messages" — token streaming (for a live UI)
+for msg_chunk, metadata in graph.stream(inputs, config, stream_mode="messages"):
+    print(msg_chunk.content, end="", flush=True)
+
+# You can even combine modes:
+for mode, chunk in graph.stream(inputs, config, stream_mode=["updates", "messages"]):
+    ...
+```
+
+**Your mental model:** `"values"` = "give me the whole notebook page," `"updates"` = "give me just the new sentence someone wrote," `"messages"` = "give me the pen strokes as they happen."
+
+---
+
+## ⏸️ Chapter 17: Human-in-the-Loop (HITL), `interrupt`, and `Command`
+
+This is the piece your notes flagged as "skipped for now" — but it's actually central to production agents (loan approvals, sending emails, deleting data — anywhere you don't want the LLM acting fully autonomously).
+
+### Why HITL matters
+An agent that can call tools autonomously is powerful but risky. You often want: *"pause right before this specific action, show a human what you're about to do, and only continue if they approve (or let them edit the input first)."*
+
+### `interrupt()` — pausing a node mid-execution
+
+`interrupt()` is a function you call **inside a node**. It pauses the graph at that exact point, and whatever value you pass to it gets surfaced to whoever is running the graph (e.g. your frontend).
+
+```python
+from langgraph.types import interrupt, Command
+
+def human_approval_node(state: State) -> dict:
+    # Pause here and surface the proposed action to the human
+    decision = interrupt({
+        "question": "Send this email?",
+        "draft": state["draft_email"]
+    })
+    # Execution PAUSES on the line above until the graph is resumed
+    # `decision` will contain whatever the human sends back
+    if decision == "approve":
+        return {"status": "approved"}
+    return {"status": "rejected"}
+```
+
+Critically: this **requires a checkpointer** (like `MemorySaver`, which you already know), because pausing means LangGraph has to save the exact state and resume later — potentially minutes or days after.
+
+### Resuming with `Command`
+
+Once paused, you resume the graph by invoking it again with a `Command(resume=...)` object instead of normal input:
+
+```python
+config = {"configurable": {"thread_id": "1"}}
+
+# First call — this will run until it hits interrupt() and pause
+result = graph.invoke({"messages": [...]}, config=config)
+print(result["__interrupt__"])  # shows the payload you passed to interrupt()
+
+# Human reviews, then you resume:
+result = graph.invoke(Command(resume="approve"), config=config)
+```
+
+`Command` isn't only for resuming interrupts, though — that's its most common use in HITL. More generally, `Command` lets a **node** return both a state update *and* an explicit routing instruction in one object, which is useful when a node needs to decide "update state AND jump to this specific node" without going through `add_conditional_edges`:
+
+```python
+def router_node(state: State) -> Command:
+    if state["needs_review"]:
+        return Command(update={"status": "pending"}, goto="human_review")
+    return Command(update={"status": "auto_approved"}, goto="execute")
+```
+
+### Real pattern: approve-before-send agent
+
+```
+START → draft_email_node → human_approval_node (interrupt) → [approved?] → send_email_node → END
+                                                              → [rejected] → END
+```
+
+This is the pattern you'll want for OrchestraAI if any agent action has real-world side effects (sending something, deleting something, spending money) — you pause right before the irreversible step.
+
+---
+
+## 🔌 Chapter 18: MCP — Adapters, Transports, and What Changed in 2026
+
+You've got the conceptual foundation already (Host/Client/Server, Tools/Resources/Prompts). Let's get concrete on transports and adapters, and then cover what's actually changing in the protocol right now — because MCP is mid-overhaul as of this writing (July 2026), and a lot of blog posts you'll find are already stale.
+
+### The transports — only two officially, one deprecated
+
+| Transport | How it works | Use case |
+|---|---|---|
+| **STDIO** | Client spawns the server as a **local subprocess**, talks over stdin/stdout | Local tools: filesystem access, a local Python script, your own DB on your machine |
+| **Streamable HTTP** | Client sends HTTP POST requests to a server URL; server can respond with a single JSON response or open a stream for multiple messages | Remote/hosted servers — a SaaS wraps their API as an MCP server you hit over the network |
+| **HTTP+SSE** *(deprecated)* | The original remote transport — separate SSE stream for server→client, HTTP POST for client→server | Legacy only. Streamable HTTP replaced it because SSE required a persistent connection and complicated infrastructure. Don't build new servers on this. |
+
+```python
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
+client = MultiServerMCPClient({
+    # STDIO — local subprocess
+    "filesystem": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/qasim/projects"],
+        "transport": "stdio",
+    },
+    # Streamable HTTP — remote server
+    "github": {
+        "url": "https://api.githubcopilot.com/mcp/",
+        "transport": "streamable_http",
+        "headers": {"Authorization": "Bearer <token>"},
+    },
+})
+
+tools = await client.get_tools()
+```
+
+### `langchain-mcp-adapters` — the bridge you already know about
+
+Its whole job: turn MCP tools into `BaseTool` objects LangChain/LangGraph already understands, so `create_react_agent`, `create_agent`, or a custom `ToolNode` can use them exactly like `@tool`-decorated functions. Same idea, no reimplementation on your side.
+
+```python
+from langgraph.prebuilt import create_react_agent
+
+agent = create_react_agent(model, tools)  # `tools` came straight from MCP servers
+result = await agent.ainvoke({"messages": [{"role": "user", "content": "list files in my repo"}]})
+```
+
+### What's actually changing in MCP right now (2026)
+
+The current **stable** spec is still `2025-11-25` — that's what production servers should target today. But a big release candidate (`2026-07-28`, ratifying at the end of this month) is close to final, and it's the largest revision since MCP launched. Worth knowing about now so you're not caught off guard:
+
+- **The protocol is going stateless.** Previously, a Streamable HTTP client did an `initialize` handshake and got back an `Mcp-Session-Id` that every later request had to carry — meaning servers needed sticky sessions and shared session stores to scale. The new RC removes the handshake and session ID entirely, so any request can hit any server instance behind a plain load balancer.
+- **MCP Apps** — servers can now ship interactive HTML UIs that render in a sandboxed iframe inside the host app, not just plain text/JSON tool results. (This is the mechanism behind the `[third_party_mcp_app]`-style tools you may have seen mentioned in agent platforms.)
+- **Tasks** (for long-running work) moved from a core feature into an official **extension** — `tasks/get`, `tasks/update`, `tasks/cancel` instead of one blocking call.
+- **Roots, Sampling, and Logging are deprecated** (not removed yet — minimum 12-month deprecation window) in favor of tool parameters, resource URIs, direct provider APIs, and standard telemetry.
+- **Authorization is being hardened** to align more closely with mainstream OAuth 2.1 / OpenID Connect, including an enterprise-managed authorization extension for SSO-based access to many servers at once.
+
+Practical takeaway for you: **build against the stable 2025-11-25 spec today** — that's what `langchain-mcp-adapters` and most servers target. Just don't be surprised in the next few months when you see servers advertising the new stateless behavior; it's not a bug, it's the planned migration.
+
+---
+
+## 📚 Chapter 19: RAG — The Complete Pipeline
+
+Your notes correctly split this into "ingestion" and the missing pieces. Let's build the whole picture end to end, in the order data actually flows.
+
+### The big picture
+
+```
+Raw Documents → Load → Split (Chunk) → Embed → Store (Vector DB)   [INGESTION — done once/periodically]
+                                                        ↓
+User Query → Embed Query → Retrieve similar chunks → Augment Prompt → LLM → Answer   [RETRIEVAL — done per query]
+```
+
+RAG exists because an LLM's knowledge is frozen at training time and it can't know your private documents. RAG's job: **find the relevant pieces of your data and stuff them into the prompt** so the LLM answers using them instead of guessing.
+
+---
+
+### 19.1 Document Structure in LangChain
+
+Everything loaded into LangChain becomes a `Document` object — this is the atomic unit you'll work with everywhere in the pipeline.
+
+```python
+from langchain_core.documents import Document
+
+doc = Document(
+    page_content="LangGraph lets you build stateful multi-agent workflows...",
+    metadata={
+        "source": "langgraph_notes.md",
+        "chapter": 2,
+        "author": "qasim",
+        "date": "2026-07-01",
+        "category": "framework-notes"
+    }
+)
+```
+
+Two fields, and both matter:
+
+- **`page_content`** — the actual text that gets embedded and eventually shown to the LLM.
+- **`metadata`** — a dict that does **not** get embedded, but travels alongside the chunk everywhere. This is what lets you **filter** at retrieval time.
+
+**Why metadata matters (this is the part your notes flagged as unclear):** Say you have a RAG system over your blog posts. Without metadata filtering, a query about "LangGraph" might retrieve chunks from an unrelated post that happens to mention LangGraph once. With metadata, you can restrict retrieval:
+
+```python
+# At retrieval time, filter by metadata before/during similarity search
+retriever = vectorstore.as_retriever(
+    search_kwargs={
+        "filter": {"category": "framework-notes"}  # only search within this category
+    }
+)
+```
+
+Metadata is also how you handle **access control** (only retrieve docs this user is allowed to see), **recency** (only retrieve docs from the last 30 days), and **source attribution** (show the user which document an answer came from).
+
+---
+
+### 19.2 Loaders — getting documents in
+
+A **Loader** takes a raw source (PDF, website, database, folder) and turns it into a list of `Document` objects.
+
+```python
+from langchain_community.document_loaders import (
+    PyPDFLoader,        # single PDF
+    WebBaseLoader,      # a webpage URL
+    DirectoryLoader,    # a whole folder of files
+    CSVLoader,          # CSV rows → documents
+    TextLoader,         # plain .txt file
+)
+
+pdf_docs = PyPDFLoader("resume.pdf").load()
+web_docs = WebBaseLoader("https://qasim-mehar.github.io/blog/mcp-basics").load()
+folder_docs = DirectoryLoader("./notes", glob="**/*.md").load()
+```
+
+Every loader's `.load()` returns `list[Document]` — usually **one Document per page (PDF) or per file**, each carrying metadata the loader auto-fills (like `source` and `page` number). This consistent output is exactly why the rest of your pipeline (splitter → embedder → vector store) doesn't care which loader you used.
+
+---
+
+### 19.3 Chunking (Splitting) — types and why it matters
+
+You can't embed a 50-page PDF as one vector — it's too long, and the embedding would be a vague average of everything, useless for precise retrieval. So you **split** documents into smaller chunks first.
+
+**The core tradeoff:** chunks too small → lose context (a chunk with just "the score was 85" means nothing without knowing *what* scored 85). Chunks too large → each chunk covers too many unrelated ideas, diluting the embedding and burying the relevant sentence among irrelevant ones.
+
+| Splitter | How it splits | Best for |
+|---|---|---|
+| `CharacterTextSplitter` | Splits on a fixed character count | Simple, rarely ideal alone |
+| `RecursiveCharacterTextSplitter` | Tries paragraph → sentence → word → character breaks, in order, to keep chunks semantically whole | **Default choice for most text** |
+| `MarkdownHeaderTextSplitter` | Splits by `#`/`##` headers | Docs like yours — keeps each chapter/section intact |
+| `RecursiveJsonSplitter` | Splits nested JSON while preserving structure | Structured/API data |
+| `SemanticChunker` | Uses embeddings to split where *meaning* actually shifts, not just character count | Highest quality, more expensive to compute |
+
+```python
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=1000,      # target size per chunk, in characters
+    chunk_overlap=150,    # overlap between consecutive chunks
+)
+chunks = splitter.split_documents(pdf_docs)
+```
+
+**Why `chunk_overlap` exists:** if a key sentence gets cut exactly at a chunk boundary, overlap ensures it still appears whole in at least one chunk, so you don't lose meaning right at the seam.
+
+For your notes specifically, `MarkdownHeaderTextSplitter` would be the smart pick — split by `##` so each Chapter becomes its own retrievable unit, preserving the "Chapter 16: Streaming" heading as metadata on every chunk from that section.
+
+```python
+from langchain.text_splitter import MarkdownHeaderTextSplitter
+
+headers_to_split_on = [("##", "chapter")]
+md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on)
+chunks = md_splitter.split_text(your_markdown_notes)
+# each chunk.metadata["chapter"] = "Chapter 16: Streaming — ..."
+```
+
+---
+
+### 19.4 Embeddings — turning text into vectors
+
+An **embedding model** converts text into a fixed-length list of numbers (a vector) such that texts with similar *meaning* end up as vectors that are close together in that space. This is the mathematical trick that makes "search by meaning" instead of "search by exact keyword" possible.
+
+```python
+from langchain_mistralai import MistralAIEmbeddings
+
+embedder = MistralAIEmbeddings(model="mistral-embed")
+vector = embedder.embed_query("What is a reducer in LangGraph?")
+# vector = [0.021, -0.114, 0.083, ...] — e.g. 1024 numbers
+```
+
+Same embedding model must be used for both indexing your documents **and** embedding the user's query later — mixing embedding models breaks similarity search, since different models place meaning in different vector spaces.
+
+---
+
+### 19.5 Vector Databases — storing and searching vectors
+
+A vector DB stores each chunk's embedding (plus its text and metadata) and lets you ask "give me the top-k chunks closest to this query vector" using similarity math (commonly cosine similarity).
+
+```python
+from langchain_chroma import Chroma
+
+vectorstore = Chroma.from_documents(
+    documents=chunks,
+    embedding=embedder,
+    persist_directory="./chroma_db"   # saved to disk, not lost on restart
+)
+
+# Later — turn it into a retriever
+retriever = vectorstore.as_retriever(search_kwargs={"k": 4})  # top 4 matches
+```
+
+Common choices: **Chroma** (simple, local, great for learning/small projects — good pick for OrchestraAI right now), **FAISS** (fast, local, no server needed), **Pinecone/Qdrant/Weaviate** (managed, scale to millions of vectors, production-grade).
+
+---
+
+### 19.6 Retrieval — the actual search step
+
+At query time: embed the user's question with the *same* embedder, then ask the vector store for the most similar chunks.
+
+```python
+relevant_chunks = retriever.invoke("How does the tools_condition router work?")
+for doc in relevant_chunks:
+    print(doc.page_content[:100], doc.metadata)
+```
+
+Beyond plain similarity search, worth knowing:
+- **MMR (Maximal Marginal Relevance)** — retrieves relevant *and* diverse chunks, avoiding 4 near-duplicate results.
+- **Hybrid search** — combines vector similarity with traditional keyword (BM25) search, useful when exact terms (like error codes, function names) matter as much as meaning.
+- **Reranking** — retrieve a wider net (say top 20) with the vector store, then use a smaller specialized reranker model to re-sort down to the best 4 — improves precision.
+
+---
+
+### 19.7 Augmentation — the "A" in RAG
+
+This is the step your notes asked about directly: **augmentation = injecting retrieved chunks into the prompt before it goes to the LLM.**
+
+```python
+from langchain_core.prompts import ChatPromptTemplate
+
+prompt = ChatPromptTemplate.from_template("""
+Answer the question using ONLY the context below. If the answer isn't in the context, say you don't know.
+
+Context:
+{context}
+
+Question:
+{question}
+""")
+
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
+# The full RAG chain, LCEL-style (you already know this pattern from LangChain)
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+
+rag_chain = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | prompt
+    | model
+    | StrOutputParser()
+)
+
+answer = rag_chain.invoke("What does MemorySaver do?")
+```
+
+That's the whole loop: **retrieve → format into context → fill the prompt template → send to LLM → parse output.** Everything before this (loaders, chunking, embeddings, vector store) exists purely to make this one step possible.
+
+### 19.8 RAG as a LangGraph node (tying it back to what you know)
+
+Since you already think in graphs, the natural way to wire RAG into an agent is as a **tool** the agent can call, not a fixed pipeline:
+
+```python
+from langchain_core.tools import tool
+
+@tool
+def search_notes(query: str) -> str:
+    """Search Qasim's personal AI engineering notes for relevant context."""
+    docs = retriever.invoke(query)
+    return format_docs(docs)
+
+# Now this is just another tool, exactly like your web_search tool
+tools = [search_notes]
+agent = create_react_agent(model, tools)
+```
+
+This is **agentic RAG** — instead of always retrieving on every query, the LLM *decides* when it needs to search your knowledge base, same as it decides when to call any other tool.
+
+---
+
+## ✅ Updated Summary Table
+
+| Concept                                                      | Learned? | Notes                                           |
+| --------------------------------------------------------------| ----------| -------------------------------------------------|
+| `stream` vs `astream`                                        | ✅        | Sync for scripts, async for real backends       |
+| `stream_mode` (values/updates/messages/debug/custom)         | ✅        | Controls chunk shape, not just streaming        |
+| `interrupt()`                                                | ✅        | Pauses a node, needs a checkpointer             |
+| `Command` (resume + goto)                                    | ✅        | Resume paused graphs; also general routing tool |
+| HITL pattern                                                 | ✅        | approve-before-execute graphs                   |
+| MCP transports (stdio, Streamable HTTP, deprecated SSE)      | ✅        | Only 2 official now                             |
+| `langchain-mcp-adapters`                                     | ✅        | Converts MCP tools → LangChain tools            |
+| MCP 2026 changes (stateless core, MCP Apps, Tasks extension) | ✅        | RC now, final spec July 28 2026                 |
+| Document structure & metadata filtering                      | ✅        | `page_content` + `metadata`                     |
+| Loaders                                                      | ✅        | PDF, Web, Directory, CSV, Text                  |
+| Chunking types                                               | ✅        | Recursive, Markdown-header, Semantic            |
+| Embeddings                                                   | ✅        | Text → vector, same model for docs & queries    |
+| Vector DBs                                                   | ✅        | Chroma/FAISS (local), Pinecone/Qdrant (managed) |
+| Retrieval (+ MMR, hybrid, reranking)                         | ✅        | Similarity search and its upgrades              |
+| Augmentation                                                 | ✅        | Context injection into prompt template          |
+| Agentic RAG (RAG as a tool)                                  | ✅        | Ties back to your existing agent-loop knowledge |
+
 ## ✅ Summary Table: What You Have Learned
 
-| Concept | Learned? | Project |
-|---|---|---|
-| Gen AI vs Agentic AI | ✅ | Theory |
-| What is LangGraph | ✅ | Theory |
-| Why LangGraph vs LangChain | ✅ | Theory |
-| Sequential Workflow | ✅ | script_writter |
-| Parallel Workflow (Fan-Out/Fan-In) | ✅ | AI_content_Moderator |
-| Conditional Workflow | ✅ | chat_bot |
-| Reducers (custom + add_messages) | ✅ | Both |
-| TypedDict State | ✅ | All projects |
-| Annotated (metadata on state) | ✅ | All projects |
-| Router Function | ✅ | chat_bot |
-| Conditional Edges | ✅ | chat_bot |
-| ToolNode | ✅ | chat_bot |
-| @tool decorator | ✅ | chat_bot |
-| bind_tools | ✅ | chat_bot |
-| tools_condition | ✅ | chat_bot |
-| MemorySaver | ✅ | chat_bot |
-| Thread ID (session memory) | ✅ | chat_bot |
-| Streaming (stream_mode) | ✅ | chat_bot |
-| .env / dotenv setup | ✅ | All projects |
-| Virtual environments | ✅ | All projects |
-| LangSmith (tracing) | ❌ | Not yet |
-| Persistent Checkpointers | ❌ | Not yet |
-| Structured Output (Pydantic) | ❌ | Not yet |
-| Multi-Agent Systems | ❌ | Not yet |
-| Subgraphs | ❌ | Not yet |
+| Concept                            | Learned? | Project              |
+| ------------------------------------| ----------| ----------------------|
+| Gen AI vs Agentic AI               | ✅        | Theory               |
+| What is LangGraph                  | ✅        | Theory               |
+| Why LangGraph vs LangChain         | ✅        | Theory               |
+| Sequential Workflow                | ✅        | script_writter       |
+| Parallel Workflow (Fan-Out/Fan-In) | ✅        | AI_content_Moderator |
+| Conditional Workflow               | ✅        | chat_bot             |
+| Reducers (custom + add_messages)   | ✅        | Both                 |
+| TypedDict State                    | ✅        | All projects         |
+| Annotated (metadata on state)      | ✅        | All projects         |
+| Router Function                    | ✅        | chat_bot             |
+| Conditional Edges                  | ✅        | chat_bot             |
+| ToolNode                           | ✅        | chat_bot             |
+| @tool decorator                    | ✅        | chat_bot             |
+| bind_tools                         | ✅        | chat_bot             |
+| tools_condition                    | ✅        | chat_bot             |
+| MemorySaver                        | ✅        | chat_bot             |
+| Thread ID (session memory)         | ✅        | chat_bot             |
+| Streaming (stream_mode)            | ✅        | chat_bot             |
+| .env / dotenv setup                | ✅        | All projects         |
+| Virtual environments               | ✅        | All projects         |
+| LangSmith (tracing)                | ❌        | Not yet              |
+| Persistent Checkpointers           | ❌        | Not yet              |
+| Structured Output (Pydantic)       | ❌        | Not yet              |
+| Multi-Agent Systems                | ❌        | Not yet              |
+| Subgraphs                          | ❌        | Not yet              |
 
 ---
 
 > 💪 **You have covered an impressive range for a beginner. The foundation is solid. Keep building!**
 
-
-stream , astream, value, update, HITL, interupt, command,
-MCP:
- mcp adapters
- transport:
-            HTTP
-            STDIO
-            SSE
