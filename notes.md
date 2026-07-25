@@ -908,10 +908,7 @@ Vectorless RAG fits when the corpus is structurally rich (policies, contracts, r
 
 ---
 
-Deep agents:
-           what are shallow agents , ReAct Agent and problems with them and how deep agents solve them
-          characteristics/core components of deep agents e.g planiing tool, sunagents, system prompt , file system (Persistant memeory accesable to all the sub agents) etc
-        
+
 
 
 # Part VI: What's Still Missing
@@ -920,18 +917,198 @@ Deep agents:
 
 Honest list of what hasn't been covered yet but matters for production agentic systems:
 
-| Topic | What it is |
-|---|---|
-| **LangSmith** | Tracing and debugging LangGraph runs, see exactly what each node did, what prompt was sent, what came back. Listed as a dependency but not yet used. |
-| **Persistent checkpointers** | `SqliteSaver` / `PostgresSaver`, the database-backed replacements for `MemorySaver` once memory needs to survive a restart. |
-| **Subgraphs** | Embedding one LangGraph inside another, for large systems where different parts of an agent are their own isolated workflows. |
-| **Multi-agent systems** | Several specialized agents (researcher, writer, critic), each its own graph, coordinated by a supervisor. |
-| **Error handling and retries** | What happens when an LLM returns something malformed or an API call fails, and how to add retry/fallback logic to a node. |
-| **Structured output** | `llm.with_structured_output(MyPydanticModel)` instead of manually parsing `res.content.strip()`. |
-| **Iterative workflows** | Loops that keep refining an output until some quality bar is met, rather than running once. |
-| **RAG evaluation** | Measuring retrieval quality (precision/recall on retrieved chunks) and answer quality systematically, instead of eyeballing outputs. |
+| Topic                          | What it is                                                                                                                                           |
+| --------------------------------| ------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **LangSmith**                  | Tracing and debugging LangGraph runs, see exactly what each node did, what prompt was sent, what came back. Listed as a dependency but not yet used. |
+| **Persistent checkpointers**   | `SqliteSaver` / `PostgresSaver`, the database-backed replacements for `MemorySaver` once memory needs to survive a restart.                          |
+| **Subgraphs**                  | Embedding one LangGraph inside another, for large systems where different parts of an agent are their own isolated workflows.                        |
+| **Multi-agent systems**        | Several specialized agents (researcher, writer, critic), each its own graph, coordinated by a supervisor.                                            |
+| **Error handling and retries** | What happens when an LLM returns something malformed or an API call fails, and how to add retry/fallback logic to a node.                            |
+| **Structured output**          | `llm.with_structured_output(MyPydanticModel)` instead of manually parsing `res.content.strip()`.                                                     |
+| **Iterative workflows**        | Loops that keep refining an output until some quality bar is met, rather than running once.                                                          |
+| **RAG evaluation**             | Measuring retrieval quality (precision/recall on retrieved chunks) and answer quality systematically, instead of eyeballing outputs.                 |
 
 ---
+
+# Part VII: Deep Agents
+
+## Chapter 27: Shallow Agents, the ReAct Loop, and Where It Breaks
+
+### What a shallow agent actually is
+
+Everything you built in `chat_bot`, the LLM node plus `ToolNode` plus `tools_condition` looping back on itself, is a **ReAct agent**. ReAct stands for Reason + Act: the model reasons about what to do, calls a tool, observes the result, reasons again, and repeats until it decides it's done.
+
+```
+LLM reasons → calls a tool → observes result → LLM reasons again → ... → done
+```
+
+This is the shape `create_react_agent` and `langchain.agents.create_agent` both wrap for you. It's usually called a **shallow agent** once you compare it to what's coming next in this chapter, not because it's badly built, but because everything it knows lives in one flat, ever-growing list of messages.
+
+### Where the ReAct loop breaks down
+
+The loop works well for short tasks: a handful of tool calls, a bounded conversation. It starts failing in specific, predictable ways once a task gets long or complex:
+
+**Context window overflow.** Every tool call and every result gets appended to the same `messages` list. A research task that runs 40 tool calls means 40 tool results sitting in context, most of them irrelevant by the time the agent needs to write the final answer. Eventually you hit the model's context limit, or the model starts losing track of the actually important information buried under noise.
+
+**No real planning.** A ReAct agent decides its next action one step at a time, based only on what just happened. It has no explicit plan it's working through and nothing that keeps it honest about what's left to do. Ask it to do a five-part task and it might nail three parts and quietly forget the other two, because there was never a persisted list of "these are the five things I need to finish."
+
+**Nothing survives a compaction or a crash.** If you truncate old messages to save context space, whatever information lived only in that truncated history is gone. There's no separate place the agent could have written down an important intermediate finding to protect it.
+
+**One flat context for every subtask.** A research agent gathering information from ten sources dumps all ten sources' worth of content into the same context the final writing step also has to work in. There's no way to isolate "the noisy work of finding source 7" from "the clean context needed to write the final report."
+
+**No delegation.** Everything happens in one agent, one context, sequentially. There's no clean way to hand off an independent chunk of the task to a separate reasoning process and just get back a summary.
+
+These aren't bugs you can patch by writing a better system prompt. They're structural limits of "one growing list of messages, one loop." Deep agents are the architectural fix.
+
+---
+
+## Chapter 28: What a Deep Agent Actually Is
+
+A deep agent, in the sense LangChain uses the term with its `deepagents` library, is a ReAct-style loop wrapped with a specific set of built-in infrastructure: planning, a virtual filesystem, subagent delegation, and automatic context management. The name comes from the fact that it can go deep on a task instead of staying shallow and reactive.
+
+The pitch is genuinely simple to use:
+
+```python
+from deepagents import create_deep_agent
+
+agent = create_deep_agent(
+    model=model,
+    tools=[web_search],
+    system_prompt="Act as a researcher",
+)
+
+result = agent.invoke({
+    "messages": [{"role": "user", "content": "Research LangGraph and write a summary"}]
+})
+```
+
+Compare that to the plain ReAct version:
+
+```python
+from langchain.agents import create_agent
+
+simple_agent = create_agent(model=model, tools=[web_search])
+```
+
+Same three lines, same tools list, but `simple_agent` has no planning, no filesystem, no delegation. Everything from here in this chapter is what those extra capabilities inside `create_deep_agent` are actually doing.
+
+It's built on LangGraph underneath, so everything from Part II still applies: streaming, checkpointing, human-in-the-loop, `interrupt()`. Deep Agents is a harness on top, not a replacement.
+
+---
+
+## Chapter 29: The Four Core Components
+
+### 29.1 Planning, the `write_todos` tool
+
+Every deep agent gets a built-in `write_todos` tool by default. When it receives a task with multiple parts, it writes an explicit todo list into its own state before starting, then updates that list as items get completed.
+
+```
+write_todos([
+    "Search for LangGraph documentation",
+    "Search for recent LangGraph release notes",
+    "Summarize findings into summary.md"
+])
+```
+
+This is the direct fix for "no real planning" from Chapter 27. The plan isn't implicit in the model's reasoning anymore, it's an explicit, persisted list the agent can check itself against, and that you can inspect from the outside to see exactly what the agent thinks it still needs to do.
+
+### 29.2 Subagents, the `task` tool
+
+A deep agent can spawn subagents to handle independent pieces of work, each subagent getting its own isolated context window. The parent agent calls a subagent through the built-in `task` tool, waits for it to finish, and receives back a summary rather than the subagent's entire raw working context.
+
+```python
+from deepagents import create_deep_agent
+
+research_subagent = {
+    "name": "researcher",
+    "description": "Searches the web and returns findings on a topic",
+    "prompt": "You are a research specialist. Search and summarize findings.",
+    "tools": [web_search],
+}
+
+agent = create_deep_agent(
+    model=model,
+    tools=[web_search],
+    subagents=[research_subagent],
+)
+```
+
+This solves two of the Chapter 27 problems at once. It gives you delegation, an independent subtask runs in its own process instead of jamming everything into one sequential loop, and it gives you context isolation, ten noisy tool calls spent finding a source live only in the subagent's context, and the parent only ever sees the clean summary that comes back. Subagents can even run in parallel for genuinely independent subtasks.
+
+### 29.3 The virtual filesystem, persistent and shared
+
+Deep agents get a set of file tools (read, write, edit, search) backed by a **virtual filesystem**. This is the mechanism that solves "nothing survives a compaction or a crash" and "no shared memory across subagents" simultaneously.
+
+The filesystem isn't tied to the actual disk by default, it's a pluggable backend, state-backed by default (lives in the LangGraph state/checkpointer), or swappable for a real disk, a database, or cloud storage. Crucially, it's accessible to the main agent *and* every subagent it spawns, which makes it the shared memory layer between them. A subagent can write a finding to a file, and the main agent (or a different subagent) can read it later, without that finding ever having lived in either agent's message history.
+
+```python
+result = agent.invoke({"messages": "Research LangGraph and write a summary in summary.md"})
+
+# The files the agent created or touched are available in the result
+result["files"]  # e.g. {"summary.md": "...", "notes/source_1.md": "..."}
+```
+
+### 29.4 The system prompt
+
+The system prompt in a deep agent isn't just "be a helpful assistant", it's the layer that tells the agent *how* to use the other three components: when to write a todo list, when to delegate to a subagent instead of doing the work itself, when to write findings to a file instead of keeping them in the message history. `create_deep_agent`'s default prompt already encodes sensible defaults for this, and you extend it with `system_prompt=` for domain-specific behavior, as in the "Act as a researcher" example above.
+
+---
+
+## Chapter 30: Middleware, the Mechanism Behind All of This
+
+None of the four components above are hardcoded into one big function. They're implemented as **middleware**, composable pieces that hook into the agent loop (before/after the model call, before/after a tool call) and modify its behavior. `create_deep_agent` bundles a specific default stack of middleware so you get all of it without wiring anything by hand:
+
+- **Planning middleware**, adds the `write_todos` tool and the todo-tracking behavior
+- **Filesystem middleware**, adds the file read/write/edit/search tools and wires them to a backend
+- **Subagent middleware**, adds the `task` tool and manages spawning and isolating subagent context
+- **Summarization/compaction middleware**, automatically compresses long conversation history and offloads large tool outputs to disk instead of letting them sit in the message list forever
+- **Human-in-the-loop middleware**, lets you require approval before specific tool calls execute, built on the same `interrupt()` mechanism from Chapter 10
+
+Because it's middleware, you can swap or override any piece. Don't want the default filesystem backend, pass your own `FilesystemMiddleware` instance. Don't want a subagent to inherit filesystem access, give that subagent its own middleware config, subagents declared this way don't automatically inherit the parent's middleware.
+
+This is also the direct answer to why deep agents fix the "context window overflow" problem from Chapter 27: the summarization/compaction middleware is doing this automatically, in the background, without you writing any manual truncation logic.
+
+---
+
+## Chapter 31: Files a Deep Agent Creates to Preserve Context
+
+Beyond whatever files the agent writes for your specific task (a `summary.md`, notes per source, and so on), the harness uses a few conventions to keep context under control and persist knowledge across sessions:
+
+- **`AGENTS.md`**, a file the memory middleware reads on startup to load persistent context and instructions across sessions, the same file survives a restart, which is how a deep agent "remembers" project-level context without that context ever occupying space in the live message history.
+- **Offloaded tool outputs**, when a tool call returns something large (a long document, a big search result), the context management middleware can write the full output to a file and leave only a short reference or summary in the message list, keeping the actual context window lean while the full content stays retrievable if needed.
+- **Compaction summaries**, when a conversation grows past a threshold, the summarization middleware compresses older turns into a summary, again keeping the working context small without discarding the information outright.
+
+The pattern across all three is the same: don't let information disappear just because it's not in the live context anymore, put it somewhere durable and let the agent go fetch it again if it turns out to matter.
+
+---
+
+## Chapter 32: When to Reach for What
+
+Three layers, in increasing order of how much you're building yourself:
+
+- **LangGraph** (Part II), when the agent loop itself isn't the right shape and you need custom routing, custom state, or a workflow that isn't a simple reason-act loop at all.
+- **`create_agent`** (plain ReAct, Part I question you asked earlier), when you want a lighter agent without the bundled planning/filesystem/subagent machinery, a single tool-calling loop is genuinely enough for the task.
+- **`create_deep_agent`**, when the task is long-running, multi-step, or would otherwise blow past context limits, the kind of thing that benefits from planning, delegation, and persistent files. This is the architecture behind tools like Claude Code and other long-horizon coding/research agents.
+
+They compose rather than compete: any compiled LangGraph graph can be passed into a deep agent as a subagent, so custom orchestration you build in Part II style slots directly into the Part VII harness when you need both.
+
+---
+
+Guardrails
+
+
+## Summary: Deep Agents
+
+| Concept                                                                         | Covered |
+| ---------------------------------------------------------------------------------| ---------|
+| Shallow agent / ReAct loop, and why it breaks on long tasks                     | Yes     |
+| `write_todos`, the planning tool                                                | Yes     |
+| Subagents and the `task` tool, isolated context + delegation                    | Yes     |
+| Virtual filesystem, shared persistent memory across agents                      | Yes     |
+| System prompt's role in a deep agent                                            | Yes     |
+| Default middleware stack (planning, filesystem, subagents, summarization, HITL) | Yes     |
+| `AGENTS.md` and context-preserving files                                        | Yes     |
+| When to use LangGraph vs `create_agent` vs `create_deep_agent`                  | Yes     |
 
 ## Summary: LangGraph Core
 

@@ -2,3 +2,4 @@ deepagents
 langchain
 langchain-mistralai
 python-dotenv
+tavily-python
